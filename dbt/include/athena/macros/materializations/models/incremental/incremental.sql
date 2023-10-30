@@ -6,8 +6,9 @@
   {% set on_schema_change = incremental_validate_on_schema_change(config.get('on_schema_change'), default='ignore') %}
 
   {% set lf_tags_config = config.get('lf_tags_config') %}
+  {% set lf_inherited_tags = config.get('lf_inherited_tags') %}
   {% set lf_grants = config.get('lf_grants') %}
-  {% set partitioned_by = config.get('partitioned_by', default=none) %}
+  {% set partitioned_by = config.get('partitioned_by') %}
   {% set target_relation = this.incorporate(type='table') %}
   {% set existing_relation = load_relation(this) %}
   {% set tmp_relation = make_temp_relation(this) %}
@@ -24,16 +25,18 @@
 
   {% set to_drop = [] %}
   {% if existing_relation is none %}
-    {% set build_sql = create_table_as(False, target_relation, sql) -%}
+    {% set query_result = safe_create_table_as(False, target_relation, sql) -%}
+    {% set build_sql = "select '" ~ query_result ~ "'" -%}
   {% elif existing_relation.is_view or should_full_refresh() %}
     {% do drop_relation(existing_relation) %}
-    {% set build_sql = create_table_as(False, target_relation, sql) -%}
+    {% set query_result = safe_create_table_as(False, target_relation, sql) -%}
+    {% set build_sql = "select '" ~ query_result ~ "'" -%}
   {% elif partitioned_by is not none and strategy == 'insert_overwrite' %}
     {% set tmp_relation = make_temp_relation(target_relation) %}
     {% if tmp_relation is not none %}
       {% do drop_relation(tmp_relation) %}
     {% endif %}
-    {% do run_query(create_table_as(True, tmp_relation, sql)) %}
+    {% set query_result = safe_create_table_as(True, tmp_relation, sql) -%}
     {% do delete_overlapping_partitions(target_relation, tmp_relation, partitioned_by) %}
     {% set build_sql = incremental_insert(on_schema_change, tmp_relation, target_relation, existing_relation) %}
     {% do to_drop.append(tmp_relation) %}
@@ -42,25 +45,46 @@
     {% if tmp_relation is not none %}
       {% do drop_relation(tmp_relation) %}
     {% endif %}
-    {% do run_query(create_table_as(True, tmp_relation, sql)) %}
+    {% set query_result = safe_create_table_as(True, tmp_relation, sql) -%}
     {% set build_sql = incremental_insert(on_schema_change, tmp_relation, target_relation, existing_relation) %}
     {% do to_drop.append(tmp_relation) %}
   {% elif strategy == 'merge' and table_type == 'iceberg' %}
     {% set unique_key = config.get('unique_key') %}
+    {% set incremental_predicates = config.get('incremental_predicates') %}
     {% set delete_condition = config.get('delete_condition') %}
+    {% set update_condition = config.get('update_condition') %}
+    {% set insert_condition = config.get('insert_condition') %}
     {% set empty_unique_key -%}
       Merge strategy must implement unique_key as a single column or a list of columns.
     {%- endset %}
     {% if unique_key is none %}
       {% do exceptions.raise_compiler_error(empty_unique_key) %}
     {% endif %}
-
+    {% if incremental_predicates is not none %}
+      {% set inc_predicates_not_list -%}
+        Merge strategy must implement incremental_predicates as a list of predicates.
+      {%- endset %}
+      {% if not adapter.is_list(incremental_predicates) %}
+        {% do exceptions.raise_compiler_error(inc_predicates_not_list) %}
+      {% endif %}
+    {% endif %}
     {% set tmp_relation = make_temp_relation(target_relation) %}
     {% if tmp_relation is not none %}
       {% do drop_relation(tmp_relation) %}
     {% endif %}
-    {% do run_query(create_table_as(True, tmp_relation, sql)) %}
-    {% set build_sql = iceberg_merge(on_schema_change, tmp_relation, target_relation, unique_key, existing_relation, delete_condition) %}
+    {% set query_result = safe_create_table_as(True, tmp_relation, sql) -%}
+    {% set build_sql = iceberg_merge(
+        on_schema_change=on_schema_change,
+        tmp_relation=tmp_relation,
+        target_relation=target_relation,
+        unique_key=unique_key,
+        incremental_predicates=incremental_predicates,
+        existing_relation=existing_relation,
+        delete_condition=delete_condition,
+        update_condition=update_condition,
+        insert_condition=insert_condition,
+      )
+    %}
     {% do to_drop.append(tmp_relation) %}
   {% endif %}
 
@@ -85,7 +109,7 @@
   {{ run_hooks(post_hooks, inside_transaction=False) }}
 
   {% if lf_tags_config is not none %}
-    {{ adapter.add_lf_tags(target_relation, lf_tags_config) }}
+    {{ adapter.add_lf_tags(target_relation, lf_tags_config, lf_inherited_tags) }}
   {% endif %}
 
   {% if lf_grants is not none %}

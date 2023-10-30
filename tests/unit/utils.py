@@ -5,6 +5,7 @@ from typing import Optional
 import agate
 import boto3
 
+from dbt.adapters.athena.utils import AthenaCatalogType
 from dbt.config.project import PartialProject
 
 from .constants import AWS_REGION, BUCKET, CATALOG_ID, DATA_CATALOG_NAME, DATABASE_NAME
@@ -146,10 +147,18 @@ class TestAdapterConversions:
 
 class MockAWSService:
     def create_data_catalog(
-        self, catalog_name: str = DATA_CATALOG_NAME, catalog_type: str = "GLUE", catalog_id: str = CATALOG_ID
+        self,
+        catalog_name: str = DATA_CATALOG_NAME,
+        catalog_type: AthenaCatalogType = AthenaCatalogType.GLUE,
+        catalog_id: str = CATALOG_ID,
     ):
         athena = boto3.client("athena", region_name=AWS_REGION)
-        athena.create_data_catalog(Name=catalog_name, Type=catalog_type, Parameters={"catalog-id": catalog_id})
+        parameters = {}
+        if catalog_type == AthenaCatalogType.GLUE:
+            parameters = {"catalog-id": catalog_id}
+        else:
+            parameters = {"catalog": catalog_name}
+        athena.create_data_catalog(Name=catalog_name, Type=catalog_type.value, Parameters=parameters)
 
     def create_database(self, name: str = DATABASE_NAME, catalog_id: str = CATALOG_ID):
         glue = boto3.client("glue", region_name=AWS_REGION)
@@ -450,7 +459,7 @@ class MockAWSService:
                 },
                 "Parameters": {"compressionType": "snappy", "classification": "parquet"},
             }
-            for dt in ["2022-01-01", "2022-01-02", "2022-01-03"]
+            for dt in [f"2022-01-{day:02d}" for day in range(1, 27)]
         ]
         glue = boto3.client("glue", region_name=AWS_REGION)
         glue.batch_create_partition(

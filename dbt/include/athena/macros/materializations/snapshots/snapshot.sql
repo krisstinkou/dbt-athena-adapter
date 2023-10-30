@@ -128,6 +128,7 @@
   {%- set table_type = config.get('table_type', 'hive') -%}
 
   {%- set lf_tags_config = config.get('lf_tags_config') -%}
+  {%- set lf_inherited_tags = config.get('lf_inherited_tags') -%}
   {%- set lf_grants = config.get('lf_grants') -%}
 
   {{ log('Checking if target table exists') }}
@@ -136,11 +137,6 @@
           schema=model.schema,
           identifier=target_table,
           type='table') -%}
-
-
-  {% if not adapter.check_schema_exists(model.database, model.schema) %}
-    {% do create_schema(model.database, model.schema) %}
-  {% endif %}
 
   {%- if not target_relation.is_table -%}
     {% do exceptions.relation_wrong_type(target_relation, 'table') %}
@@ -235,7 +231,7 @@
   {{ run_hooks(post_hooks, inside_transaction=False) }}
 
   {% if lf_tags_config is not none %}
-    {{ adapter.add_lf_tags(target_relation, lf_tags_config) }}
+    {{ adapter.add_lf_tags(target_relation, lf_tags_config, lf_inherited_tags) }}
   {% endif %}
 
   {% if lf_grants is not none %}
